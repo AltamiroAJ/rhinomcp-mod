@@ -22,6 +22,7 @@ Compared to baseline object metadata, this mod exposes richer geometric semantic
 Rhino visualization command for this geometry cache:
 
 - Rhino command: `mcpmodobb` (toggle OBB + projection profile display)
+- Rhino command: `mcpmodclearcache` (clear cached pose/OBB user strings)
 
 ### 2. Added Topological Context
 
@@ -132,8 +133,9 @@ Keep only one server enabled at a time (`rhino` or `rhino-dev`) to avoid duplica
 1. Start Rhino and run `mcpmodstart`.
 2. Optional: run `mcpmodobb` to toggle OBB + projection profile visualization.
 3. Optional: run `mcpmodgraph` to toggle connectivity graph display.
-4. Open Claude Desktop.
-5. Confirm Rhino tools appear in Claude (hammer/tools icon).
+4. Optional: run `mcpmodclearcache` to clear cached pose/OBB user strings.
+5. Open Claude Desktop.
+6. Confirm Rhino tools appear in Claude (hammer/tools icon).
 
 
 ## Credits
