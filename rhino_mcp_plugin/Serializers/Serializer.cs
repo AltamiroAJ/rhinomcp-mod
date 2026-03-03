@@ -219,6 +219,11 @@ namespace rhinomcp_mod.Serializers
                     objInfo["geometry"] = SerializeBrepGeometry(brep, includeGeometrySummary, outlineMaxPoints, out brepType, preferredWorkingPlane);
                     objInfo["type"] = brepType;
                 }
+                else if (obj.Geometry is Rhino.Geometry.Mesh mesh)
+                {
+                    objInfo["type"] = "MESH";
+                    objInfo["geometry"] = SerializeMeshGeometry(mesh, includeGeometrySummary, outlineMaxPoints, preferredWorkingPlane);
+                }
 
                 return objInfo;
             }
