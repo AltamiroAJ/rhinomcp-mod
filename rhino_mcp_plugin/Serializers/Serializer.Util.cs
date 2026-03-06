@@ -41,6 +41,13 @@ public static partial class Serializer
                 plane = BuildBrepWorkingPlane(brep);
                 isPlanar = true;
                 return true;
+            case Mesh mesh:
+                if (TryBuildMeshWorkingPlane(mesh, out plane))
+                {
+                    isPlanar = false;
+                    return true;
+                }
+                break;
         }
 
         BoundingBox bbox = geometry.GetBoundingBox(true);
@@ -221,6 +228,206 @@ public static partial class Serializer
 
         workingPlane = StabilizePlane(workingPlane);
         return workingPlane;
+    }
+
+    private static bool TryBuildMeshWorkingPlane(Mesh mesh, out Plane plane)
+    {
+        plane = Plane.WorldXY;
+        if (mesh == null || mesh.Vertices.Count == 0)
+        {
+            return false;
+        }
+
+        BoundingBox bbox = mesh.GetBoundingBox(true);
+        if (!bbox.IsValid)
+        {
+            return false;
+        }
+
+        var points2d = new List<Point2d>(mesh.Vertices.Count);
+        for (int i = 0; i < mesh.Vertices.Count; i++)
+        {
+            Point3f p = mesh.Vertices[i];
+            if (double.IsNaN(p.X) || double.IsNaN(p.Y) || double.IsInfinity(p.X) || double.IsInfinity(p.Y))
+            {
+                continue;
+            }
+            points2d.Add(new Point2d(p.X, p.Y));
+        }
+
+        if (points2d.Count < 2)
+        {
+            plane = Plane.WorldXY;
+            plane.Origin = bbox.Center;
+            return true;
+        }
+
+        Vector2d xAxis2d;
+        Vector2d yAxis2d;
+        Point2d center2d;
+        if (!TryComputeWorldUpFootprintFrame(points2d, out xAxis2d, out yAxis2d, out center2d))
+        {
+            plane = Plane.WorldXY;
+            plane.Origin = bbox.Center;
+            return true;
+        }
+
+        Vector3d xAxis = new Vector3d(xAxis2d.X, xAxis2d.Y, 0.0);
+        Vector3d yAxis = new Vector3d(yAxis2d.X, yAxis2d.Y, 0.0);
+        Point3d origin = new Point3d(center2d.X, center2d.Y, bbox.Center.Z);
+        plane = new Plane(origin, xAxis, yAxis);
+        if (!plane.IsValid)
+        {
+            return false;
+        }
+
+        plane = StabilizePlane(plane);
+        return true;
+    }
+
+    private static bool TryComputeWorldUpFootprintFrame(
+        List<Point2d> points,
+        out Vector2d xAxis,
+        out Vector2d yAxis,
+        out Point2d center)
+    {
+        xAxis = new Vector2d(1.0, 0.0);
+        yAxis = new Vector2d(0.0, 1.0);
+        center = Point2d.Origin;
+
+        if (points == null || points.Count < 2)
+        {
+            return false;
+        }
+
+        int[] hullIndices;
+        Curve hullCurve = PolylineCurve.CreateConvexHull2d(points.ToArray(), out hullIndices);
+        if (hullCurve == null || hullIndices == null || hullIndices.Length < 2)
+        {
+            return false;
+        }
+
+        var hull = new List<Point2d>(hullIndices.Length);
+        for (int i = 0; i < hullIndices.Length; i++)
+        {
+            int idx = hullIndices[i];
+            if (idx < 0 || idx >= points.Count)
+            {
+                continue;
+            }
+            hull.Add(points[idx]);
+        }
+        if (hull.Count > 1 && hull[0].DistanceTo(hull[hull.Count - 1]) <= RhinoMath.ZeroTolerance)
+        {
+            hull.RemoveAt(hull.Count - 1);
+        }
+
+        if (hull.Count < 2)
+        {
+            return false;
+        }
+
+        const double eps = 1e-12;
+        bool found = false;
+        double bestArea = double.MaxValue;
+        double bestWidth = -1.0;
+        double bestAngle = double.MaxValue;
+        Point2d bestCenter = Point2d.Origin;
+        Vector2d bestX = new Vector2d(1.0, 0.0);
+        Vector2d bestY = new Vector2d(0.0, 1.0);
+
+        for (int i = 0; i < hull.Count; i++)
+        {
+            Point2d a = hull[i];
+            Point2d b = hull[(i + 1) % hull.Count];
+            Vector2d edge = b - a;
+            double edgeLen = edge.Length;
+            if (edgeLen <= RhinoMath.ZeroTolerance)
+            {
+                continue;
+            }
+
+            Vector2d ux = edge / edgeLen;
+            Vector2d uy = new Vector2d(-ux.Y, ux.X);
+            Canonicalize2dAxes(ref ux, ref uy);
+
+            double minU = double.MaxValue, maxU = double.MinValue;
+            double minV = double.MaxValue, maxV = double.MinValue;
+            for (int j = 0; j < hull.Count; j++)
+            {
+                Point2d p = hull[j];
+                double u = Dot2d(p, ux);
+                double v = Dot2d(p, uy);
+                if (u < minU) minU = u;
+                if (u > maxU) maxU = u;
+                if (v < minV) minV = v;
+                if (v > maxV) maxV = v;
+            }
+
+            double width = maxU - minU;
+            double height = maxV - minV;
+            double area = width * height;
+            double angle = Math.Abs(Math.Atan2(ux.Y, ux.X));
+
+            bool better = false;
+            if (!found || area < bestArea - eps)
+            {
+                better = true;
+            }
+            else if (Math.Abs(area - bestArea) <= eps)
+            {
+                if (width > bestWidth + eps)
+                {
+                    better = true;
+                }
+                else if (Math.Abs(width - bestWidth) <= eps && angle < bestAngle - eps)
+                {
+                    better = true;
+                }
+            }
+
+            if (!better)
+            {
+                continue;
+            }
+
+            found = true;
+            bestArea = area;
+            bestWidth = width;
+            bestAngle = angle;
+            bestX = ux;
+            bestY = uy;
+            double centerU = 0.5 * (minU + maxU);
+            double centerV = 0.5 * (minV + maxV);
+            bestCenter = new Point2d(
+                centerU * ux.X + centerV * uy.X,
+                centerU * ux.Y + centerV * uy.Y);
+        }
+
+        if (!found)
+        {
+            return false;
+        }
+
+        xAxis = bestX;
+        yAxis = bestY;
+        center = bestCenter;
+        return true;
+    }
+
+    private static void Canonicalize2dAxes(ref Vector2d xAxis, ref Vector2d yAxis)
+    {
+        const double eps = 1e-12;
+        if (xAxis.X < -eps || (Math.Abs(xAxis.X) <= eps && xAxis.Y < 0.0))
+        {
+            xAxis = -xAxis;
+            yAxis = -yAxis;
+        }
+    }
+
+    private static double Dot2d(Point2d p, Vector2d v)
+    {
+        return p.X * v.X + p.Y * v.Y;
     }
 
     private static List<Point3d> SampleCurvePoints(Curve curve, int maxPoints)
